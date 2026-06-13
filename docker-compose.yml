@@ -1,0 +1,29 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: steam-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: steam-search-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - chroma_data:/app/chroma_data
+
+volumes:
+  mongo_data:
+  chroma_data:
