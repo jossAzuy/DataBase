@@ -5,6 +5,7 @@ from typing import Any
 
 from src.db.mongo_client import get_games_collection
 from src.models import SearchFilters
+from src.services.cache import build_cache_key, get_cached_json, set_cached_json
 
 
 def _valid_date(value: str | None) -> str | None:
@@ -42,6 +43,19 @@ def build_query(filters: SearchFilters) -> dict[str, Any]:
 
 def search_games(filters: SearchFilters, limit: int = 20, skip: int = 0) -> list[dict[str, Any]]:
     collection = get_games_collection()
+    cache_key = build_cache_key(
+        "search:games",
+        {
+            "filters": filters.model_dump(mode="json"),
+            "limit": limit,
+            "skip": skip,
+        },
+    )
+
+    cached_results = get_cached_json(cache_key)
+    if cached_results is not None:
+        return cached_results
+
     mongo_query = build_query(filters)
 
     projection = {
@@ -58,4 +72,6 @@ def search_games(filters: SearchFilters, limit: int = 20, skip: int = 0) -> list
     }
 
     cursor = collection.find(mongo_query, projection).skip(skip).limit(limit)
-    return list(cursor)
+    results = list(cursor)
+    set_cached_json(cache_key, results)
+    return results

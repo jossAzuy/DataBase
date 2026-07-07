@@ -1,4 +1,11 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: steam-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
   mongodb:
     image: mongo:7
     container_name: steam-mongodb
@@ -7,6 +14,77 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: steam-rustfs
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      RUSTFS_VOLUMES: /data/rustfs{0...3}
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS: "*"
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_OBS_LOGGER_LEVEL: info
+      RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true"
+    volumes:
+      - rustfs_data_0:/data/rustfs0
+      - rustfs_data_1:/data/rustfs1
+      - rustfs_data_2:/data/rustfs2
+      - rustfs_data_3:/data/rustfs3
+      - rustfs_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "sh",
+          "-ec",
+          "host=\"$${RUSTFS_HEALTHCHECK_HOST:-127.0.0.1}\"; scheme=\"http\"; set -- -fsS; curl \"$${@}\" \"$${scheme}://$${host}:9000/health\" && curl \"$${@}\" \"$${scheme}://$${host}:9001/rustfs/console/health\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  rustfs-volume-permission-helper:
+    image: alpine:3.21
+    container_name: steam-rustfs-permissions
+    volumes:
+      - rustfs_data_0:/data0
+      - rustfs_data_1:/data1
+      - rustfs_data_2:/data2
+      - rustfs_data_3:/data3
+      - rustfs_logs:/logs
+    command: >
+      sh -c "chown -R 10001:10001 /data0 /data1 /data2 /data3 /logs && echo 'RustFS volume permissions fixed'"
+    restart: "no"
+
+  rustfs-init-buckets:
+    image: database-app
+    container_name: steam-rustfs-init
+    depends_on:
+      - rustfs
+      - rustfs-volume-permission-helper
+    env_file:
+      - .env
+    environment:
+      RUSTFS_ENDPOINT: http://rustfs:9000
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+    entrypoint:
+      - python
+      - -c
+    command:
+      - >-
+        import time; exec("from src.db.rustfs_client import ensure_default_buckets\nfor _ in range(60):\n    try:\n        print(ensure_default_buckets())\n        raise SystemExit(0)\n    except Exception as exc:\n        print(f'Waiting for RustFS... {exc}')\n        time.sleep(2)\nraise SystemExit('RustFS did not become ready in time')")
+    restart: "no"
 
   app:
     build:
@@ -17,9 +95,16 @@ services:
     env_file:
       - .env
     depends_on:
+      - redis
       - mongodb
+      - rustfs
     ports:
       - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RUSTFS_ENDPOINT: http://rustfs:9000
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
     volumes:
       - ./src:/app/src
       - chroma_data:/app/chroma_data
@@ -27,3 +112,8 @@ services:
 volumes:
   mongo_data:
   chroma_data:
+  rustfs_data_0:
+  rustfs_data_1:
+  rustfs_data_2:
+  rustfs_data_3:
+  rustfs_logs:

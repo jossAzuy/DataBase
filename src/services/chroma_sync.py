@@ -4,6 +4,8 @@ from typing import Any
 
 from src.db.chroma_client import get_chroma_collection
 from src.db.mongo_client import get_games_collection
+from src.config import settings
+from src.services.cache import build_cache_key, clear_cache_namespace, get_cached_json, set_cached_json
 
 
 def _to_chroma_doc(doc: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -65,10 +67,18 @@ def sync_mongo_to_chroma(batch_size: int = 100) -> dict[str, int]:
         chroma_collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
         synced += len(ids)
 
+    clear_cache_namespace("search:semantic")
     return {"synced": synced}
 
 
 def semantic_search(query: str, top_k: int = 5) -> dict[str, Any]:
     chroma_collection = get_chroma_collection()
+    cache_key = build_cache_key("search:semantic", {"query": query, "top_k": top_k})
+
+    cached_results = get_cached_json(cache_key)
+    if cached_results is not None:
+        return cached_results
+
     results = chroma_collection.query(query_texts=[query], n_results=top_k)
+    set_cached_json(cache_key, results, ttl_seconds=settings.cache_ttl_seconds)
     return results
